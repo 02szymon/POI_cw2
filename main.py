@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from pyransac3d import Plane
 
 
 def load_points_from_csv(file_name):
@@ -10,26 +10,30 @@ def load_points_from_csv(file_name):
     #Wczytuje chmurę punktów z pliku CSV.
 
     df = pd.read_csv(file_name)
-    points = df[['x', 'y', 'z']].to_numpy()
+    points = df[['x', 'y', 'z']].to_numpy()  # Zakładamy, że CSV ma kolumny: 'x', 'y', 'z'
     return points
 
 
-def find_disjoint_clusters(points, k=3):
+def find_disjoint_clusters_dbscan(points, eps=0.5, min_samples=10):
 
-    # Znajduje rozłączne chmury punktów za pomocą algorytmu k-średnich.
-    # Stworzenie i dopasowanie modelu k-średnich
-    kmeans = KMeans(n_clusters=k, random_state=0)
-    kmeans.fit(points)
-    labels = kmeans.labels_
+    # Znajduje rozłączne chmury punktów za pomocą algorytmu DBSCAN.
+    # Stworzenie i dopasowanie modelu DBSCAN
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    dbscan.fit(points)
+
+    labels = dbscan.labels_
 
     return labels
 
 
-def save_clusters_to_csv(points, labels, k=3):
+def save_clusters_to_csv(points, labels):
 
-    #Zapisuje rozłączne chmury punktów do oddzielnych plików CSV.
+    # Zapisuje rozłączne chmury punktów do oddzielnych plików CSV.
 
-    for cluster_id in range(k):
+    unique_labels = set(labels)
+    for cluster_id in unique_labels:
+        if cluster_id == -1:
+            continue  # Pomijamy szum (punkty oznaczone jako -1)
         cluster_points = points[labels == cluster_id]
         df = pd.DataFrame(cluster_points, columns=["x", "y", "z"])
         file_name = f"cluster_{cluster_id + 1}.csv"
@@ -37,30 +41,13 @@ def save_clusters_to_csv(points, labels, k=3):
         print(f"Zapisano klaster {cluster_id + 1} do pliku {file_name}.")
 
 
-def fit_plane_ransac(points, max_iterations=100, distance_threshold=0.01):
+def fit_plane_ransac_pyransac(points):
 
-    # Dopasowanie płaszczyzny do chmury punktów za pomocą algorytmu RANSAC.
+    #Dopasowanie płaszczyzny do chmury punktów za pomocą pyransac3d.
 
-    best_plane = None
-    max_inliers_count = 0
-
-    for _ in range(max_iterations):
-        sample_indices = np.random.choice(points.shape[0], 3, replace=False)
-        p1, p2, p3 = points[sample_indices]
-
-        normal_vector = np.cross(p2 - p1, p3 - p1)
-        a, b, c = normal_vector
-        d = -np.dot(normal_vector, p1)
-
-        distances = np.abs(a * points[:, 0] + b * points[:, 1] + c * points[:, 2] + d) / np.linalg.norm(normal_vector)
-
-        inliers = points[distances < distance_threshold]
-
-        if len(inliers) > max_inliers_count:
-            max_inliers_count = len(inliers)
-            best_plane = (a, b, c, d)
-
-    return best_plane
+    plane = Plane()
+    best_eq, inliers = plane.fit(points, thresh=0.01)  # Dopasowanie płaszczyzny przy użyciu pyransac3d
+    return best_eq
 
 
 def analyze_plane(plane):
@@ -95,6 +82,7 @@ def visualize_points_and_plane(points, plane, cluster_id):
 
     a, b, c, d = plane
 
+
     xx, yy = np.meshgrid(np.linspace(min(points[:, 0]), max(points[:, 0]), 100),
                          np.linspace(min(points[:, 1]), max(points[:, 1]), 100))
     zz = (-a * xx - b * yy - d) / c
@@ -107,27 +95,34 @@ def visualize_points_and_plane(points, plane, cluster_id):
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    plt.title(f'Dopasowanie płaszczyzny do klastra {cluster_id + 1} za pomocą RANSAC')
+    plt.title(f'Dopasowanie płaszczyzny do klastra {cluster_id + 1} za pomocą pyransac3d')
     plt.show()
 
 
 
-file_name = "polaczone.csv"  # Ścieżka do pliku CSV z danymi punktów
+file_name = "polaczone.csv"
 points = load_points_from_csv(file_name)
 
-labels = find_disjoint_clusters(points, k=3)
 
-save_clusters_to_csv(points, labels, k=3)
+labels = find_disjoint_clusters_dbscan(points, eps=0.5, min_samples=30)
 
-for cluster_id in range(3):
+
+save_clusters_to_csv(points, labels)
+
+
+unique_labels = set(labels)
+for cluster_id in unique_labels:
+    if cluster_id == -1:
+        continue  # Pomijamy szum (punkty oznaczone jako -1)
+
     cluster_points = points[labels == cluster_id]
     print(f"\nAnaliza klastra {cluster_id + 1}:")
     if len(cluster_points) < 3:
         print("Za mało punktów, aby dopasować płaszczyznę.")
         continue
 
-    # Dopasowanie płaszczyzny za pomocą RANSAC
-    plane_parameters = fit_plane_ransac(cluster_points)
+    # Dopasowanie płaszczyzny za pomocą pyransac3d
+    plane_parameters = fit_plane_ransac_pyransac(cluster_points)
     if plane_parameters:
         analyze_plane(plane_parameters)
         visualize_points_and_plane(cluster_points, plane_parameters, cluster_id)
